@@ -2,22 +2,42 @@
 # SnowSAR Flight Planner
 # JKing 16/08/2016
 #
-# Inputs:
-# Ouputs:
+# Inputs:Shapefile (hardcoded for now, set working directory and filename)
+# Ouputs:Shapefile (FP_*sarSwath*_*overlap*)
 ####################################################
 rm(list = ls()) #Clear workspace
 graphics.off()
 
+###############################
+#Libraries
+#To install copy the next line
+#install.packages(c("sp","rgdal","rgeos"))
+###############################
 library(sp)  # vector data
-library(raster)  # raster data
 library(rgdal)  # input/output, projections
 library(rgeos)  # geometry ops
-library(spdep)  # spatial dependence
-library(ggplot2)
+
+###############################
+#Constants
+###############################
+#Change the next line to the directory where you have the geodata stored
+workingDir = 'C:/Users/kingj/Documents/Projects/2016-2017/080816_SnowEx/Tools/SARPlan/geo_data'
+polyFile = 'GM_ROI_Small'
+GCS = "+proj=longlat +ellps=WGS84" #CRS geographic coordniate system WGS84
+PCS = "+proj=utm +zone=12 +south +units=m +ellps=WGS84" #CRS projected coordniate system UTM12N/WGS84
+overlap = 50 #overlap in %
+sarSwath = 400 #swath width in m
+
+airSpeed = 248 #aircraft speed in NM/h; 248 = Wallops P3
+airAltitude = 500 #Flight altitude in m; Not currently used
+timeTurm = 0.1666 #Conservative estimate of the time per turn and align 0.1666 hours = 10 min
 
 
-
-##################################################################
+#################################################################
+#getMinBBox function was taken from example code at
+#http://www.uni-kiel.de/psychologie/rexrepos/posts/diagBounding.html#minimum-bounding-box
+#Estimates a min sized rectangle to contain a given set of points (xy coordinates)
+#################################################################
 getMinBBox <- function(xy) {
     stopifnot(is.matrix(xy), is.numeric(xy), nrow(xy) >= 2, ncol(xy) == 2)
 
@@ -71,27 +91,17 @@ getMinBBox <- function(xy) {
 }
 #########################################################################################
 
-
-workingDir = 'C:/Users/kingj/Documents/Projects/2016-2017/080816_SnowEx/Tools/SARPlan/geo_data'#getwd()
-GCS = "+proj=longlat +ellps=WGS84" #CRS geographic coordniate system WGS84
-PCS = "+proj=utm +zone=12 +south +units=m +ellps=WGS84" #CRS projected coordniate system UTM16N/WGS84
-overlap = 25 #overlap in %
-sarSwath = 400 #swath width in m
-
-#Aircraft const
-airSpeed = 248 #in NM/h; 248 = Wallops P3
-airAltitude = 500 #Flight altitude in m; Not currently used
-timeTurm = 0.1666 #Conservative estimate of the time per turn and align 0.1666 hours = 10 min
-
-polyData <- readOGR(dsn = workingDir, layer = "GM_ROI_Small")
-polyData <- spTransform(polyData, CRS(PCS))
+# Load polygon, extract coordinate system, transofrm to local grid, reclass to a dataframe
+polyData = readOGR(dsn = workingDir, layer = polyFile)
+polyCRS = polyData@proj4string@projargs
+polyData = spTransform(polyData, CRS(PCS))
 polyDF = fortify(polyData)
 
 xy = data.matrix(polyDF[1:2])
 mbb <- getMinBBox(xy)       ## minimum bounding box
 H   <- chull(xy)            ## convex hull
 
-# plot original points, convex hull, and minimum bounding box
+# Plot minimum bounding box
 plot(xy, xlab="Easting (m)", ylab="Northing (m)", asp=1, type="n",
          xlim=range(c(xy[ , 1], mbb$pts[ , 1])),
          ylim=range(c(xy[ , 2], mbb$pts[ , 2])))
@@ -99,18 +109,26 @@ polygon(xy[H, ], col=NA)    ## show convex hull
 polygon(mbb$pts, border="blue", lwd=2)
 points(xy, pch=16, cex=1.5)
 
+# Esimate the distance between the box corners and create lines for the
+# bounding edges of the minor axis
 seqDist = rep(0,nrow(mbb$pts))
 lineSeg = matrix(, nrow = 4, ncol = 3)
 lineId = 0
 segID = -1
+
+if(mbb$width < mbb$height){ #Check for minor axis
+		minAxis = mbb$width
+	}else{
+		minAxis = mbb$height
+	}
+
 for (pt in 1:nrow(mbb$pts)){
 	if(pt == nrow(mbb$pts)){
 	seqDist[pt] = sqrt((mbb$pts[1,1] - mbb$pts[pt,1])^2 + (mbb$pts[1,2] - mbb$pts[pt,2])^2)
-	}
-	else{
+	}else{
 	seqDist[pt] = sqrt((mbb$pts[pt,1] - mbb$pts[(pt+1),1])^2 + (mbb$pts[pt,2] - mbb$pts[(pt+1),2])^2)
 	}
-	if (round(seqDist[pt])  == round(mbb$width)){
+	if (round(seqDist[pt])  == round(minAxis)){
 		segID = segID +  2
 		lineId = lineId + 1
 		lineSeg[segID:(segID+1),1] = lineId
@@ -129,13 +147,12 @@ colnames(lineDF)<-c("ID", "N", "E")
 
 coordinates(lineDF) <- ~ N+E
 proj4string(lineDF) <- CRS(PCS)
-
-L1= Line(lineDF[1:2,])
-L2 = Line(lineDF[3:4,])
  
-Ls1 = Lines(list(L1), ID = "a")
-Ls2 = Lines(list(L2), ID = "b")
-SL = SpatialLines(list(Ls1, Ls2))
+Ls1 = Lines(list(Line(lineDF[1:2,])), ID = "a")
+Ls2 = Lines(list(Line(lineDF[3:4,])), ID = "b")
+
+# Estimate the swath center positions based on the AOE minor axis, SAR footprint,
+# and desired overlap
 flightPoints = mbb$width/(sarSwath-(sarSwath*(overlap/100)))
 
 ptsLs1 <- spsample(Ls1, flightPoints, type="regular")
@@ -145,8 +162,8 @@ proj4string(ptsLs2) <- CRS(PCS)
 points(ptsLs1)
 points(ptsLs2)
 
-
-numLines = length(ptsLs1)
+numLines = length(ptsLs1) #Number of  passes required
+cat("Passes required: ", numLines,"\n")
  
 flightList <- vector("list", numLines)
 segLengthKm <- rep(NA, numLines)
@@ -161,15 +178,20 @@ for(lns in 0:(numLines-1)) {
 	airTime[lns+1] = segLengthKm[lns+1]/(airSpeed*1.852*1000/3600)*1000/3600 #in hours
 	}
 	
-totalAirTime = sum(airTime)+(numLines*timeTurm)
-flightlines = SpatialLines(flightList)
+onStation = round(sum(airTime),1)
+onTurn = round((numLines*timeTurm),1)
+totalAirTime = onStation + onTurn
+cat("On station (hours): ", onStation,"\n")
+cat("On turn or allignment (hours): ", onTurn,"\n")
+cat("Total air time (hours): ", totalAirTime,"\n")
 
+
+flightlines = SpatialLines(flightList)
 footprintPoly <- gBuffer(flightlines, width=sarSwath/2, byid=TRUE, capStyle="FLAT", quadsegs=10)
 footprintDf <- data.frame(ID=as.character(c(1:length(ptsLs1))))
 footprintOut <- SpatialPolygonsDataFrame(footprintPoly,footprintDf)
-writeOGR(obj=footprintOut, dsn=workingDir, layer="SARF12", driver="ESRI Shapefile")
-
-
-
 plot(footprintOut, add=TRUE)
+writeOGR(obj=footprintOut, dsn=workingDir, layer=paste0("FP_",sarSwath,"_",overlap), driver="ESRI Shapefile", overwrite_layer=TRUE)
+
+
 
