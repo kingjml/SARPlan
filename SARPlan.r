@@ -11,11 +11,12 @@ graphics.off()
 ###############################
 #Libraries
 #To install copy the next line
-#install.packages(c("sp","rgdal","rgeos"))
+#install.packages(c("sp","rgdal","rgeos","ggplot2"))
 ###############################
 library(sp)  # vector data
 library(rgdal)  # input/output, projections
 library(rgeos)  # geometry ops
+library(ggplot2) # needed by fortify()
 
 ###############################
 #Constants
@@ -23,8 +24,8 @@ library(rgeos)  # geometry ops
 #Change the next line to the directory where you have the geodata stored
 workingDir = 'C:/Users/kingj/Documents/Projects/2016-2017/080816_SnowEx/Tools/SARPlan/geo_data'
 polyFile = 'GM_ROI_Small'
-GCS = "+proj=longlat +ellps=WGS84" #CRS geographic coordniate system WGS84
-PCS = "+proj=utm +zone=12 +south +units=m +ellps=WGS84" #CRS projected coordniate system UTM12N/WGS84
+GCS = "+proj=longlat +ellps=WGS84 +datum=WGS84" #CRS geographic coordniate system WGS84
+PCS = "+proj=utm +zone=12 +north +units=m +ellps=WGS84 +datum=WGS84" #CRS projected coordniate system UTM12N/WGS84
 overlap = 50 #overlap in %
 sarSwath = 400 #swath width in m
 
@@ -192,6 +193,7 @@ footprintDf <- data.frame(ID=as.character(c(1:length(ptsLs1))))
 footprintOut <- SpatialPolygonsDataFrame(footprintPoly,footprintDf)
 plot(footprintOut, add=TRUE)
 writeOGR(obj=footprintOut, dsn=workingDir, layer=paste0("FP_",sarSwath,"_",overlap), driver="ESRI Shapefile", overwrite_layer=TRUE)
+cat(showWKT(PCS),file=paste0(workingDir,"/FP_",sarSwath,"_",overlap,".prj"))
 
 
 
